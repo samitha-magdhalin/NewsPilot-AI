@@ -42,7 +42,8 @@ python -m pytest -q tests
 1. Create a GitHub repository and upload the **contents of this `newspilot-ai` folder**. Do not upload `.venv`, Python caches, the local SQLite database, or generated PNG outputs.
 2. Confirm that `app.py`, `requirements.txt`, `src/`, and `config/` are at the repository root.
 3. Open [Streamlit Community Cloud](https://share.streamlit.io/) and choose **Create app**. Select your repository, branch, and `app.py` as the main file.
-4. Deploy and wait for the build to finish; then share the generated app URL with your reviewer.
+4. Keep `packages.txt` at the repository root. It installs the TrueType font used by the graphic renderer so generated text stays correctly sized in the Linux deployment.
+5. Deploy and wait for the build to finish; then share the generated app URL with your reviewer. If the app is already deployed, reboot it after adding `packages.txt` so the system font is installed.
 
 The cloud runtime has its own filesystem. Local SQLite cache and generated files should be treated as temporary and may not persist across restarts. Never commit API keys or secrets; put any required secrets in the deployment platform's secrets manager.
 
