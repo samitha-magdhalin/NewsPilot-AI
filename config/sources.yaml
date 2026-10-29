@@ -1,0 +1,17 @@
+sources:
+  - name: BBC World
+    url: https://feeds.bbci.co.uk/news/world/rss.xml
+    category: World
+    enabled: true
+  - name: NPR News
+    url: https://feeds.npr.org/1001/rss.xml
+    category: General
+    enabled: true
+  - name: NASA Breaking News
+    url: https://www.nasa.gov/news-release/feed/
+    category: Science
+    enabled: true
+  - name: UN News
+    url: https://news.un.org/feed/subscribe/en/news/all/rss.xml
+    category: World
+    enabled: true

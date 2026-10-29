@@ -1,0 +1,10 @@
+news:
+  freshness_hours: 168
+  max_articles: 60
+  request_timeout_seconds: 12
+  request_delay_seconds: 0.4
+  max_response_bytes: 2500000
+storage:
+  enabled: true
+  database_path: data/newspilot.sqlite3
+output_dir: output
