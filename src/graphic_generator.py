@@ -121,7 +121,34 @@ def make_graphic(headline, summary, publisher='News source', published_date='', 
     panel_bottom = int(h*.83)
     if style == 'Photojournalism':
         # Image-led feeling created from original geometric illustration; clearly local artwork.
-        d.rounded_rectangle((margin, int(h*.10), w-margin, int(h*.42)), radius=int(min(w,h)*.025), fill='#244b55', outline='#477d7c', width=max(2,w//500))
+        hero_box = (margin, int(h*.10), w-margin, int(h*.42))
+        d.rounded_rectangle(hero_box, radius=int(min(w,h)*.025), fill='#244b55', outline='#477d7c', width=max(2,w//500))
+        # Fill the hero panel with a deliberate, locally rendered editorial illustration.
+        # This avoids an empty image placeholder when no licensed/source image is available.
+        hx0, hy0, hx1, hy1 = hero_box
+        hero_w, hero_h = hx1-hx0, hy1-hy0
+        # Soft grid and circuit traces add depth without pretending to be a real photograph.
+        grid = '#315d65'
+        for gx in range(hx0 + int(hero_w*.06), hx1, max(24, int(w*.045))):
+            d.line((gx, hy0+int(hero_h*.10), gx, hy1-int(hero_h*.10)), fill=grid, width=max(1,w//1200))
+        for gy in range(hy0 + int(hero_h*.18), hy1, max(24, int(h*.045))):
+            d.line((hx0+int(hero_w*.04), gy, hx1-int(hero_w*.04), gy), fill=grid, width=max(1,w//1200))
+        # Network nodes and connecting paths on the left give the illustration a focal point.
+        nodes = [(.13,.34),(.25,.22),(.30,.57),(.43,.34),(.48,.70),(.18,.72),(.56,.52)]
+        links = [(0,1),(0,2),(1,3),(2,3),(2,5),(3,4),(3,6),(4,6),(5,4)]
+        pts = [(hx0+int(hero_w*x), hy0+int(hero_h*y)) for x,y in nodes]
+        for a,b in links:
+            d.line((*pts[a], *pts[b]), fill='#4aa99b', width=max(2,w//420))
+        for i,(nx,ny) in enumerate(pts):
+            r = max(5, int(w*(.009 if i in (1,3,6) else .006)))
+            d.ellipse((nx-r,ny-r,nx+r,ny+r), fill=accent_hex if i in (1,3) else '#65bdb0', outline='#d8f0e8', width=max(1,w//900))
+        # A simple shield outline communicates security/verification; it is original vector art.
+        sx, sy = hx0+int(hero_w*.30), hy0+int(hero_h*.25)
+        sw, sh = int(hero_w*.18), int(hero_h*.47)
+        shield = [(sx,sy),(sx+sw//2,sy-int(sh*.10)),(sx+sw,sy),(sx+int(sw*.92),sy+int(sh*.52)),(sx+sw//2,sy+sh),(sx+int(sw*.08),sy+int(sh*.52))]
+        d.line(shield+[shield[0]], fill='#f5f7f4', width=max(2,w//380), joint='curve')
+        d.line((sx+int(sw*.28),sy+int(sh*.43),sx+int(sw*.44),sy+int(sh*.59),sx+int(sw*.73),sy+int(sh*.30)), fill=accent_hex, width=max(3,w//300), joint='curve')
+        # Keep the existing sun/landscape accent on the right side.
         d.ellipse((int(w*.68),int(h*.13),int(w*.84),int(h*.32)), fill=accent_hex)
         d.polygon([(int(w*.47),int(h*.42)),(int(w*.69),int(h*.22)),(int(w*.87),int(h*.42))],fill='#39766f')
         panel_y = int(h*.47)
