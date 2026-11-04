@@ -685,19 +685,24 @@ def make_graphic(
     )
     text_y += int(height * 0.025)
 
-    # Short summary in a comfortably readable font.
-    footer_top = panel_bottom - int(height * 0.105)
+    # Show meaningful supporting context in the image, not just a tiny teaser.
+    # Fit as much of the source-grounded description as the selected canvas allows.
+    footer_top = panel_bottom - int(height * 0.085)
     available_body_height = max(0, footer_top - text_y)
+    body_text = _shorten(summary, 520) if summary else ""
 
-    body_text = _shorten(summary, 125) if summary else ""
-    body_font_size = int(width * 0.029)
+    # Start with a readable editorial size and step down only when needed to
+    # fit additional lines without colliding with the attribution footer.
+    body_font_size = max(16, int(width * 0.026))
     body_font = _font(body_font_size)
+    body_line_height = int(_text_height(draw, "Ag", body_font) * 1.24)
+    max_body_lines = max(0, available_body_height // max(1, body_line_height))
 
-    body_line_height = int(_text_height(draw, "Ag", body_font) * 1.28)
-    max_body_lines = min(
-        3,
-        max(0, available_body_height // max(1, body_line_height)),
-    )
+    while body_text and max_body_lines < 3 and body_font_size > 16:
+        body_font_size -= 1
+        body_font = _font(body_font_size)
+        body_line_height = int(_text_height(draw, "Ag", body_font) * 1.24)
+        max_body_lines = max(0, available_body_height // max(1, body_line_height))
 
     if body_text and max_body_lines > 0:
         text_y, _ = _draw_wrapped_text(
@@ -709,7 +714,7 @@ def make_graphic(
             body_font,
             palette["muted"],
             max_lines=max_body_lines,
-            line_spacing=1.28,
+            line_spacing=1.24,
         )
 
     # Footer separator and source attribution.

@@ -9,6 +9,18 @@ def stories_json(stories): return json.dumps([s.model_dump(mode='json') for s in
 def briefing_markdown(story, verification, briefing):
  lines=[f"# {story.canonical_headline}",f"\n**Status:** {verification['status']}",f"\n{briefing.get('summary','')}","\n## Sources"]
  for a in story.related_articles: lines.append(f"- [{a.publisher_name}: {a.title}]({a.canonical_url}) — {a.published_at.isoformat() if a.published_at else 'date unavailable'}")
+ claims = verification.get('claims', [])
+ if claims:
+  articles_by_id = {a.article_id: a for a in story.related_articles}
+  lines.append('\n## Candidate claims — not fact-checked')
+  for claim in claims:
+   lines.append(f"\n- **{claim.get('text', '')}**")
+   for evidence in claim.get('evidence', []):
+    article = articles_by_id.get(evidence.get('article_id'))
+    if article:
+     lines.append(f"  - Evidence: “{evidence.get('excerpt', '')}” — [{article.publisher_name}]({article.canonical_url})")
+   for limitation in claim.get('limitations', []):
+    lines.append(f"  - Limitation: {limitation}")
  lines += ['\n## Limitations']+['- '+x for x in verification.get('limitations',[])]
  return '\n'.join(lines).encode()
 def social_txt(posts): return '\n\n'.join(f'## {k}\n{v}' for k,v in posts.items() if not k.startswith('_')).encode()

@@ -53,6 +53,11 @@ class Article(BaseModel):
             self.publisher_domain=urlparse(self.canonical_url).hostname or ''
         return self
 
+class ClaimEvidence(BaseModel):
+    article_id: str
+    excerpt: str
+
+
 class Claim(BaseModel):
     claim_id: str
     text: str
@@ -60,7 +65,9 @@ class Claim(BaseModel):
     supporting_source_ids: list[str] = Field(default_factory=list)
     contradictory_source_ids: list[str] = Field(default_factory=list)
     excerpts: list[str] = Field(default_factory=list)
+    evidence: list["ClaimEvidence"] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+
 
 class Story(BaseModel):
     story_id: str

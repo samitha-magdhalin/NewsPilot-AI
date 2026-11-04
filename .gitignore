@@ -8,3 +8,4 @@ __pycache__/
 data/*.sqlite3
 output/*.png
 output/*.json
+config/settings.local.yaml

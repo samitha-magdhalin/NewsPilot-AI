@@ -33,3 +33,13 @@ def test_live_validation_report_writer(tmp_path, monkeypatch):
     assert (tmp_path/'live_validation_report.json').exists()
     assert any(x['status']=='NOT RUN' for x in report['checks'])
     assert any(x['check']=='AI model dependency' and x['status']=='PASS' for x in report['checks'])
+
+
+def test_social_posts_do_not_reuse_summary_error_as_story_copy(article_factory):
+    story = group_stories([article_factory()])[0]
+    posts = generate_posts(story, {
+        'summary': 'A detailed summary cannot be prepared because the available feeds provide headlines but not enough article text.'
+    })
+    assert 'cannot be prepared' not in posts['LinkedIn'].lower()
+    assert 'cannot be prepared' not in posts['Instagram'].lower()
+    assert 'headline alone' not in posts['Facebook'].lower()

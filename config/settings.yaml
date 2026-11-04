@@ -5,6 +5,12 @@ news:
   request_delay_seconds: 0.4
   max_response_bytes: 2500000
 storage:
-  enabled: true
+  enabled: false
   database_path: data/newspilot.sqlite3
 output_dir: output
+llm:
+  enabled: true
+  provider: ollama
+  base_url: http://127.0.0.1:11434
+  model: qwen2.5:3b
+  timeout_seconds: 90

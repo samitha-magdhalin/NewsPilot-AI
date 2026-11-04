@@ -2,7 +2,8 @@
 from datetime import datetime, timezone
 from urllib.parse import quote_plus, urlparse
 import requests
-from .news_fetcher import parse_feed, canonicalize_url
+from .news_fetcher import parse_feed, canonicalize_url, fetch_sources
+from . import config_loader
 
 UA = {'User-Agent': 'NewsPilotAI/2.0 (local research dashboard; contact: local-user)'}
 
@@ -57,7 +58,7 @@ def discover_web(query: str, max_results: int = 50, timeout: int = 15):
                 except Exception: pass
             a = Article(title=title, canonical_url=canonicalize_url(url), original_url=url,
                 publisher_name=domain.removeprefix('www.'), publisher_domain=domain,
-                category='Web search', description=item.get('socialimage') or '', published_at=dt,
+                category='Web search', description='', published_at=dt,
                 fetched_at=datetime.now(timezone.utc), source_type='web_search', retrieval_status='metadata_only',
                 extraction_limitations=['Discovered through the GDELT news index; open publisher link to inspect the article']).ensure_id()
             articles.append(a); count += 1
@@ -68,5 +69,31 @@ def discover_web(query: str, max_results: int = 50, timeout: int = 15):
     for a in articles:
         key = a.canonical_url
         if key not in seen: seen.add(key); unique.append(a)
+    # If public search providers are unavailable or empty, use configured publisher
+    # feeds as a resilient fallback. These are clearly labelled as feed results.
+    if not articles:
+        try:
+            configured, feed_health = fetch_sources(config_loader.load_sources(), timeout=timeout, max_articles=max_results)
+            for article in configured:
+                article.source_type = 'configured_rss_fallback'
+                article.extraction_limitations = list(article.extraction_limitations or []) + [
+                    'Returned from a configured publisher feed because public search providers were unavailable'
+                ]
+            articles.extend(configured)
+            health.append({
+                'provider': 'Configured RSS fallback',
+                'ok': bool(configured),
+                'count': len(configured),
+                'error': '' if configured else '; '.join(
+                    str(item.get('error', 'Feed unavailable')) for item in feed_health if item.get('error')
+                )[:240],
+            })
+        except Exception as exc:
+            health.append({'provider': 'Configured RSS fallback', 'ok': False, 'count': 0, 'error': str(exc)[:240]})
+    unique, seen = [], set()
+    for article in articles:
+        if article.canonical_url not in seen:
+            seen.add(article.canonical_url)
+            unique.append(article)
     unique.sort(key=lambda a:a.published_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return unique[:max_results], health

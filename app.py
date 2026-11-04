@@ -3,6 +3,7 @@ from io import BytesIO
 from zipfile import ZipFile, ZIP_DEFLATED
 import json
 import streamlit as st
+from PIL import Image
 
 from src.config_loader import load_settings, load_sources
 from src.news_fetcher import fetch_sources
@@ -57,6 +58,8 @@ h2{{font-size:clamp(1.7rem,2.5vw,2.5rem)!important}}
 .np-rule{{height:1px;background:var(--line);margin:22px 0 28px}}
 .np-article{{border:1px solid #31515a99;background:linear-gradient(145deg,#12262fe8,#0f2028f2);backdrop-filter:blur(14px);border-radius:16px;padding:22px;margin:14px 0;box-shadow:0 12px 34px #00000018;transition:transform .22s ease,border-color .22s ease,box-shadow .22s ease}}.np-article:hover{{transform:translateY(-2px);border-color:#54c4b177;box-shadow:0 18px 38px #00000026}}
 .np-small{{font-size:.82rem;color:var(--muted)}}
+@media(min-width:701px){{[class*="st-key-graphic-preview-"]{{position:sticky;top:1rem;align-self:flex-start}}}}
+[class*="st-key-graphic-preview-"] [data-testid="stImage"] img{{max-height:calc(100vh - 2rem);object-fit:contain}}
 .np-chip{{display:inline-block;border:1px solid var(--line);background:{_palette['chipbg']};color:{_palette['chipink']};border-radius:999px;padding:6px 11px;font-size:.72rem;letter-spacing:.04em;text-transform:uppercase}}
 .stTabs [data-baseweb="tab-list"]{{gap:8px;border-bottom:1px solid var(--line)}}
 .stTabs [data-baseweb="tab"]{{height:48px;padding:0 14px;color:{_palette['muted']}!important;font-weight:700!important;background:transparent!important}}
@@ -125,7 +128,7 @@ input[type="radio"],input[type="checkbox"]{{accent-color:#58D6C5!important}}
 </style>''', unsafe_allow_html=True)
 
 settings = load_settings(); sources = load_sources(); news = settings['news']
-for key, default in [('articles', []), ('stories', []), ('verification', {}), ('search_health', []), ('feed_health', []), ('article_texts', {}), ('last_graphics', {}), ('selected_story_id', None)]:
+for key, default in [('articles', []), ('stories', []), ('verification', {}), ('search_health', []), ('feed_health', []), ('article_texts', {}), ('last_graphics', {}), ('last_graphic_bytes', {}), ('selected_story_id', None)]:
     if key not in st.session_state: st.session_state[key] = default
 
 
@@ -157,34 +160,52 @@ def story_by_id(sid):
 
 
 def find_related_coverage(story, max_results=20):
-    """Find additional public news-feed snippets when a publisher blocks article extraction."""
+    """Find related reports, then retrieve publisher article text where accessible.
+
+    Search-feed snippets are metadata, not full article bodies. We therefore try
+    extracting a small number of relevant publisher pages before updating the
+    briefing, and never label a feed snippet as a successfully retrieved article.
+    """
+    import re
     results, health = discover_web(story.canonical_headline, max_results=max_results)
     stop_words = {'about','after','amid','and','are','for','from','how','into','its','new','the','this','with','what','when','where','who','why'}
     def tokens(value):
-        import re
         return {w for w in re.findall(r'[a-z0-9]+', (value or '').casefold()) if len(w) > 2 and w not in stop_words}
     target = tokens(story.canonical_headline)
     existing_urls = {a.canonical_url for a in story.related_articles}
-    added = []
+    candidates = []
     for article in results:
         if article.canonical_url in existing_urls:
             continue
         overlap = len(target & tokens(article.title)) / max(1, len(target))
+        if overlap >= 0.45:
+            candidates.append((overlap, article))
+    candidates.sort(key=lambda item: (item[0], item[1].published_at.timestamp() if item[1].published_at else 0), reverse=True)
+
+    added = []
+    # Keep the user-facing action bounded: attempt up to four relevant publisher pages.
+    for _, article in candidates[:4]:
         description = ' '.join((article.description or '').split()).strip()
-        if overlap < 0.30 or len(description) < 100 or description.casefold().strip(' .!?') == article.title.casefold().strip(' .!?'):
-            continue
+        if description.casefold().strip(' .!?') == article.title.casefold().strip(' .!?'):
+            description = ''
         if description.casefold().startswith(article.title.casefold()):
             description = description[len(article.title):].lstrip(' :—–-.')
-        if len(description) < 80:
-            continue
-        article.extracted_text = description
-        article.retrieval_status = 'feed_summary'
+        try:
+            with st.spinner(f'Retrieving report from {article.publisher_name}…'):
+                body = extract_article(article.canonical_url, timeout=9)
+            article.extracted_text = body
+            article.retrieval_status = 'article_text_retrieved'
+            article.extraction_limitations = []
+            st.session_state.article_texts[article.article_id] = body
+        except Exception as exc:
+            # Keep genuine feed prose as a snippet, but never put it in extracted_text.
+            article.extracted_text = ''
+            article.retrieval_status = 'feed_summary' if len(description) >= 100 else 'metadata_only'
+            article.extraction_limitations = [f'Full article text unavailable: {type(exc).__name__}']
+        article.description = description
         story.related_articles.append(article)
-        st.session_state.article_texts[article.article_id] = description
         existing_urls.add(article.canonical_url)
         added.append(article)
-        if len(added) >= 5:
-            break
     return added, health
 
 
@@ -303,24 +324,9 @@ if active_section == 'Discover':
                             st.button('Create image', key=f'create-image-{article.article_id}', use_container_width=True, on_click=go_to_create, args=(related_story.story_id, 'Graphic studio'))
                         else:
                             st.button('Create image', key=f'create-image-{article.article_id}', use_container_width=True, disabled=True)
-                    with st.expander('Read more / retrieve text'):
-                            if full_text:
-                                st.write(full_text)
-                                st.download_button('Download article text', full_text, file_name=f'article-{article.article_id}.txt', mime='text/plain', key=f'article-download-{article.article_id}')
-                            else:
-                                st.caption('Some publishers restrict extraction or require a subscription. Only text actually retrieved will be shown.')
-                                if st.button('Retrieve available article text', key=f'extract-{article.article_id}'):
-                                    try:
-                                        with st.spinner('Retrieving readable article text…'):
-                                            extracted = extract_article(article.canonical_url)
-                                        st.session_state.article_texts[article.article_id] = extracted
-                                        article.extracted_text = extracted
-                                        st.session_state['extract_status_'+article.article_id] = 'Retrieved' if len(extracted) >= 250 else 'Partial or unavailable'
-                                        st.rerun()
-                                    except Exception:
-                                        st.error('This publisher could not be retrieved. The site may restrict access, use scripts, or require a subscription.')
-                            status = st.session_state.get('extract_status_'+article.article_id)
-                            if status: st.caption('Retrieval status: ' + status)
+                    if full_text:
+                        with st.expander('Read available article text'):
+                            st.write(full_text)
                     st.markdown('</div>', unsafe_allow_html=True)
         else:
             st.info('Search a topic or choose a suggestion above to see related news stories here.')
@@ -375,7 +381,9 @@ if active_section == 'Create studio':
             studio_options = ['Briefing', 'Social posts', 'Graphic studio']
             if st.session_state.pop('open_graphic_studio', False):
                 st.session_state['studio_tab_choice'] = 'Graphic studio'
-            studio_tab = st.radio('Studio section', studio_options, horizontal=True, key='studio_tab_choice', label_visibility='collapsed')
+            # Keep the global workspace navigation separate from the output selector.
+            # A selectbox avoids rendering a second row of visually identical navigation pills.
+            studio_tab = st.radio('Create output', studio_options, key='studio_tab_choice', horizontal=True, label_visibility='collapsed')
             if studio_tab == 'Briefing':
                 st.markdown('### A clear view of the story')
                 available_text = (st.session_state.article_texts.get(lead.article_id) or lead.extracted_text) if lead else ''
@@ -384,23 +392,74 @@ if active_section == 'Create studio':
                     with st.expander('View retrieved article text'):
                         st.write(available_text[:12000])
                 st.info(briefing.get('note', 'Review the original report before using.'))
-                if lead and not (st.session_state.article_texts.get(lead.article_id) or lead.extracted_text):
-                    if st.button('Retrieve article text for a detailed summary', key=f'retrieve-briefing-{chosen_id}', use_container_width=True):
-                        try:
-                            with st.spinner('Retrieving readable article text from the publisher…'):
-                                extracted = extract_article(lead.canonical_url)
-                            st.session_state.article_texts[lead.article_id] = extracted
-                            lead.extracted_text = extracted
-                            st.success('Article text retrieved. The briefing and graphic supporting text have been refreshed.')
-                            st.rerun()
-                        except Exception as exc:
-                            st.warning(f'Could not retrieve this publisher’s article text ({type(exc).__name__}). The site may block automated access or require a subscription. Open the original report or try another source.')
                 st.markdown('**Collected sources**')
                 for src in verification.get('sources', []): st.markdown(f'- [{src.get("publisher", "Publisher")}]({src.get("url", "")})')
+                llm_settings = settings.get('llm', {})
+                if llm_settings.get('enabled') and llm_settings.get('provider') == 'ollama':
+                    from src.claim_extractor import extract_claims_with_ollama
+
+                    st.caption(
+                        f"Optional local model: {llm_settings.get('model', 'qwen2.5:3b')}. "
+                        "Candidate extraction only; the model does not verify claims."
+                    )
+                    if st.button(
+                        'Extract candidate claims with local model',
+                        key=f'local-claims-{chosen_id}',
+                        use_container_width=True,
+                    ):
+                        try:
+                            with st.spinner('Extracting claims from retrieved article text with local Ollama…'):
+                                story.claims = extract_claims_with_ollama(
+                                    story.related_articles,
+                                    base_url=llm_settings.get('base_url', 'http://127.0.0.1:11434'),
+                                    model=llm_settings.get('model', 'qwen2.5:3b'),
+                                    timeout=llm_settings.get('timeout_seconds', 90),
+                                )
+                            story.generated_by_model = llm_settings.get('model', 'qwen2.5:3b')
+                            verification = assess_story(
+                                story, freshness_hours=news['freshness_hours']
+                            )
+                            st.session_state.verification[chosen_id] = verification
+                            st.success(
+                                f"Extracted {len(story.claims)} candidate claim(s). "
+                                "Review the quoted evidence; none are marked verified."
+                            )
+                        except (RuntimeError, ValueError) as exc:
+                            st.error(f'Local claim extraction failed: {exc}')
+                    if verification.get('claims'):
+                        articles_by_id = {
+                            article.article_id: article
+                            for article in story.related_articles
+                        }
+                        st.markdown('**Candidate claims · not fact-checked**')
+                        for claim in verification['claims']:
+                            st.markdown(f'- {claim.get("text", "")}')
+                            for evidence in claim.get('evidence', []):
+                                source_article = articles_by_id.get(evidence.get('article_id'))
+                                if source_article:
+                                    st.caption(
+                                        f'“{evidence.get("excerpt", "")}” — '
+                                        f'[{source_article.publisher_name}]'
+                                        f'({source_article.canonical_url})'
+                                    )
+                            for limitation in claim.get('limitations', []):
+                                st.caption(limitation)
+                elif not llm_settings.get('enabled'):
+                    st.caption(
+                        'Local LLM claim extraction is off. To enable it, install Ollama, '
+                        'pull a model, and set llm.enabled to true in config/settings.yaml.'
+                    )
                 st.download_button('Download briefing (.md)', briefing_markdown(story, verification, briefing), file_name='newspilot-briefing.md', mime='text/markdown', use_container_width=True)
             if studio_tab == 'Social posts':
                 st.caption('Editable drafts only. Review facts and links before publishing.')
-                posts = generate_posts(story, briefing)
+                posts_cache_key = f'social_posts_snapshot_{chosen_id}'
+                posts_source_key = f'social_posts_source_{chosen_id}'
+                current_posts_source = str(briefing.get('summary', '') or '')
+                if (posts_cache_key not in st.session_state
+                        or st.session_state.get(posts_source_key) != current_posts_source):
+                    st.session_state[posts_cache_key] = generate_posts(story, briefing)
+                    st.session_state[posts_source_key] = current_posts_source
+                posts = st.session_state[posts_cache_key]
                 clean_posts = {k:v for k,v in posts.items() if not k.startswith('_') and isinstance(v,str)}
                 edited_posts = {}
                 for platform, content in clean_posts.items():
@@ -415,28 +474,19 @@ if active_section == 'Create studio':
                     headline = st.text_area('Graphic headline', story.canonical_headline, key=f'graphic-head-{chosen_id}', height=100)
                     summary_key = f'graphic-summary-{chosen_id}'
                     default_summary = briefing.get('summary', '')
+                    insufficient_summary = 'cannot be prepared because the available' in default_summary.casefold() or 'not enough article text' in default_summary.casefold()
+                    if insufficient_summary:
+                        default_summary = ''
                     # Refresh stale widget state when it contains only the headline/feed snippet.
                     # Streamlit otherwise preserves the old value even when the default changes.
                     saved_summary = str(st.session_state.get(summary_key, '') or '').strip()
+                    stale_fallback = ('cannot be prepared because the available' in saved_summary.casefold() or 'not enough article text' in saved_summary.casefold())
                     short_source_values = {
                         story.canonical_headline.strip().casefold(),
                         (lead.description or '').strip().casefold() if lead else '',
                     }
-                    if not saved_summary or saved_summary.casefold() in short_source_values:
+                    if not saved_summary or stale_fallback or saved_summary.casefold() in short_source_values:
                         st.session_state[summary_key] = default_summary
-                    available_text = (st.session_state.article_texts.get(lead.article_id) or lead.extracted_text) if lead else ''
-                    if lead and not available_text:
-                        if st.button('Retrieve article text for a detailed description', key=f'retrieve-graphic-{chosen_id}', use_container_width=True):
-                            try:
-                                with st.spinner('Retrieving readable article text from the publisher…'):
-                                    extracted = extract_article(lead.canonical_url)
-                                st.session_state.article_texts[lead.article_id] = extracted
-                                lead.extracted_text = extracted
-                                st.session_state[summary_key] = make_briefing(story, verification).get('summary', default_summary)
-                                st.success('Article text retrieved. The supporting description has been refreshed.')
-                                st.rerun()
-                            except Exception as exc:
-                                st.warning(f'Could not retrieve this publisher’s article text ({type(exc).__name__}). The publisher may block automated access or require a subscription. Open the original report or try another source.')
                     if st.button('Search related coverage for more detail', key=f'coverage-graphic-{chosen_id}', use_container_width=True):
                         try:
                             with st.spinner('Searching public news feeds for additional reporting…'):
@@ -444,34 +494,78 @@ if active_section == 'Create studio':
                             if added:
                                 refreshed = make_briefing(story, verification).get('summary', default_summary)
                                 st.session_state[summary_key] = refreshed
-                                st.success(f'Added {len(added)} related coverage snippet(s). Review the sources before publication.')
+                                updated_briefing = dict(briefing)
+                                updated_briefing['summary'] = refreshed
+                                updated_briefing['what_happened'] = refreshed
+                                st.session_state[f'social_posts_snapshot_{chosen_id}'] = generate_posts(story, updated_briefing)
+                                st.session_state[f'social_posts_source_{chosen_id}'] = refreshed
+                                body_count = sum(1 for item in added if item.retrieval_status == 'article_text_retrieved')
+                                snippet_count = len(added) - body_count
+                                st.success(f'Found {len(added)} related report(s): {body_count} full article text(s) retrieved and {snippet_count} feed snippet(s). Review the source links before publication.')
                                 st.rerun()
                             else:
                                 st.warning('The search feeds did not return enough detailed text for a reliable summary. Open the original article or select another report with more source text.')
                         except Exception as exc:
-                            st.warning(f'Could not find related coverage ({type(exc).__name__}). Check your internet connection and try again.')
-                    summary = st.text_area('Supporting text', default_summary, key=summary_key, height=205, help='Uses retrieved article text or available reporting snippets. If the source provides only a headline, NewsPilot will not invent missing details.')
-                    category = st.selectbox('Visual style', STYLES, key=f'graphic-style-{chosen_id}')
+                            st.warning(f'Could not find usable related coverage: {exc}. Try a more specific topic or another publisher.')
+                    summary = st.text_area('Supporting text', default_summary, key=summary_key, height=205, placeholder='Add the source-grounded context that should appear in the graphic.', help='This text is printed directly on the PNG. Use a concise, source-grounded description; NewsPilot will not invent missing details.')
+                    category = st.radio('Visual style', STYLES, key=f'graphic-style-{chosen_id}', horizontal=True)
                     canvas_options = {'Instagram portrait · 1080 × 1350':(1080,1350),'Square · 1080 × 1080':(1080,1080),'Landscape · 1200 × 675':(1200,675),'Story · 1080 × 1920':(1080,1920)}
-                    canvas_label = st.selectbox('Canvas size', list(canvas_options), key=f'graphic-canvas-{chosen_id}')
+                    canvas_label = st.radio('Canvas size', list(canvas_options), key=f'graphic-canvas-{chosen_id}', horizontal=True)
                     if st.button('Generate graphic', type='primary', use_container_width=True, key=f'generate-graphic-{chosen_id}'):
-                        try:
-                            output = Path(__file__).resolve().parent / settings.get('output_dir','output') / f'{chosen_id}-{category.lower().replace(" ","-").replace("&","and")}.png'
-                            make_graphic(headline, summary, lead.publisher_name if lead else 'News source', lead.published_at.date().isoformat() if lead and lead.published_at else '', lead.canonical_url if lead else '', verification.get('status','INSUFFICIENT_EVIDENCE'), str(output), canvas_options[canvas_label], category)
-                            st.session_state.last_graphics[chosen_id] = str(output)
-                            st.session_state['graphic_generated_'+chosen_id] = True
-                            st.success('Graphic generated successfully. Preview and download are ready.')
-                            st.session_state['last_graphic_caption_'+chosen_id] = f'{headline}\n\n{summary}\n\nSource: {lead.publisher_name if lead else "News source"}\nRead more: {lead.canonical_url if lead else ""}'
-                        except Exception as exc:
-                            st.error(f'The graphic could not be rendered: {type(exc).__name__}: {exc}')
-                            st.caption('Check that Pillow is installed and that the output folder is writable, then try again.')
+                        if not summary.strip():
+                            st.warning('Add source-grounded supporting text first. This text is printed on the PNG; a headline alone is not enough for a detailed graphic.')
+                        else:
+                            try:
+                                output = Path(__file__).resolve().parent / settings.get('output_dir','output') / f'{chosen_id}-{category.lower().replace(" ","-").replace("&","and")}.png'
+                                generated_path = Path(make_graphic(
+                                    headline, summary,
+                                    lead.publisher_name if lead else 'News source',
+                                    lead.published_at.date().isoformat() if lead and lead.published_at else '',
+                                    lead.canonical_url if lead else '',
+                                    verification.get('status', 'INSUFFICIENT_EVIDENCE'),
+                                    str(output), canvas_options[canvas_label], category,
+                                ))
+                                # Do not report success until the file exists and is a readable PNG.
+                                if not generated_path.is_file() or generated_path.stat().st_size < 1024:
+                                    raise RuntimeError('The renderer did not create a valid PNG file.')
+                                with Image.open(generated_path) as check_image:
+                                    check_image.verify()
+                                # Keep the verified PNG bytes in the Streamlit session as well as
+                                # the file path. This avoids blank previews if the working directory
+                                # changes or a temporary output file is cleaned between reruns.
+                                png_bytes = generated_path.read_bytes()
+                                with Image.open(BytesIO(png_bytes)) as preview_check:
+                                    preview_check.verify()
+                                st.session_state.last_graphics[chosen_id] = str(generated_path.resolve())
+                                st.session_state.last_graphic_bytes[chosen_id] = png_bytes
+                                st.session_state['graphic_generated_'+chosen_id] = True
+                                st.success('Graphic generated and verified. Preview and download are ready.')
+                                st.session_state['last_graphic_caption_'+chosen_id] = f'{headline}\n\n{summary}\n\nSource: {lead.publisher_name if lead else "News source"}\nRead more: {lead.canonical_url if lead else ""}'
+                            except Exception as exc:
+                                st.session_state.last_graphics.pop(chosen_id, None)
+                                st.session_state.last_graphic_bytes.pop(chosen_id, None)
+                                st.session_state['graphic_generated_'+chosen_id] = False
+                                st.error(f'The graphic could not be rendered: {type(exc).__name__}: {exc}')
+                                st.caption('Check that Pillow is installed and that the output folder is writable, then try again.')
                 with right:
-                    path = st.session_state.last_graphics.get(chosen_id)
-                    if path and Path(path).exists():
-                        st.image(path, caption='Preview · locally rendered editorial graphic', use_container_width=True)
-                        st.download_button('Download PNG', Path(path).read_bytes(), file_name=Path(path).name, mime='image/png', use_container_width=True)
-                        caption = st.text_area('Caption to share', st.session_state.get('last_graphic_caption_'+chosen_id,''), key=f'caption-edit-{chosen_id}', height=125)
-                        st.download_button('Download caption (.txt)', caption, file_name='newspilot-caption.txt', mime='text/plain', use_container_width=True)
-                        st.caption('To copy, select the caption text and use Ctrl+C. Direct publishing is not enabled.')
-                    else:
-                        st.markdown('<div class="np-article"><div class="np-eyebrow">Live preview</div><h3>Your story, art-directed.</h3><p class="np-small">Choose a composition and canvas, then generate a high-resolution PNG. Each style has its own visual motif and layout.</p></div>', unsafe_allow_html=True)
+                    with st.container(key=f'graphic-preview-{chosen_id}'):
+                        path = st.session_state.last_graphics.get(chosen_id)
+                        image_bytes = st.session_state.last_graphic_bytes.get(chosen_id)
+                        if not image_bytes and path and Path(path).is_file():
+                            # Backward-compatible recovery for a graphic created before this fix.
+                            image_bytes = Path(path).read_bytes()
+                            st.session_state.last_graphic_bytes[chosen_id] = image_bytes
+                        if image_bytes:
+                            try:
+                                with Image.open(BytesIO(image_bytes)) as preview_image:
+                                    preview_image.verify()
+                                st.image(image_bytes, caption='Generated editorial graphic · PNG preview', use_container_width=True)
+                                download_name = Path(path).name if path else f'newspilot-{chosen_id}.png'
+                                st.download_button('Download PNG', image_bytes, file_name=download_name, mime='image/png', use_container_width=True)
+                            except Exception as preview_error:
+                                st.error(f'The PNG was created but could not be previewed: {type(preview_error).__name__}: {preview_error}')
+                            caption = st.text_area('Caption to share', st.session_state.get('last_graphic_caption_'+chosen_id,''), key=f'caption-edit-{chosen_id}', height=125)
+                            st.download_button('Download caption (.txt)', caption, file_name='newspilot-caption.txt', mime='text/plain', use_container_width=True)
+                            st.caption('To copy, select the caption text and use Ctrl+C. Direct publishing is not enabled.')
+                        else:
+                            st.markdown('<div class="np-article"><div class="np-eyebrow">Live preview</div><h3>Your story, art-directed.</h3><p class="np-small">Choose a composition and canvas, then generate a high-resolution PNG. Each style has its own visual motif and layout.</p></div>', unsafe_allow_html=True)

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone, timedelta
-from .data_models import VerificationStatus, Claim
+from .data_models import VerificationStatus
 from .source_independence import assess_independence
 
 def assess_story(story, primary_source_domains=None, freshness_hours=168):
